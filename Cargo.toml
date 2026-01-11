@@ -1,5 +1,5 @@
 [package]
-name = "ferron-module-example"
+name = "ferron-module-maxmind-geolocation"
 version = "0.1.0"
 edition = "2021"
 
