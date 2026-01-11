@@ -1,12 +1,9 @@
+use dashmap::DashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::net::IpAddr;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-use lru::LruCache;
-use parking_lot::Mutex;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -105,7 +102,7 @@ impl ModuleLoader for GeoIPModuleLoader {
           let reader = Reader::open_readfile(db_path)
             .map_err(|e| format!("Failed to open MaxMind database at {}: {}", db_path, e))?;
 
-          let cache_size = geoip_entry
+          let cache_max_size = geoip_entry
             .and_then(|e| e.props.get("cache_size"))
             .and_then(|v| v.as_i128())
             .unwrap_or(10_000)
@@ -116,17 +113,15 @@ impl ModuleLoader for GeoIPModuleLoader {
             .and_then(|v| v.as_i128())
             .unwrap_or(300)
             .max(1) as u64;
-          let cache_ttl = Duration::from_secs(cache_ttl_secs);
-
-          let cache = LruCache::new(NonZeroUsize::new(cache_size.max(1)).unwrap());
 
           Ok(Arc::new(GeoIPModule {
             mode,
             countries: Arc::new(countries),
             allow_unknown,
             reader: Arc::new(reader),
-            cache: Arc::new(Mutex::new(cache)),
-            cache_ttl,
+            cache: Arc::new(DashMap::new()),
+            cache_max_size,
+            cache_ttl: Duration::from_secs(cache_ttl_secs),
           }))
         })?,
     )
@@ -190,13 +185,12 @@ impl ModuleLoader for GeoIPModuleLoader {
         if let Some(cache_size_val) = entry.props.get("cache_size") {
           if let Some(v) = cache_size_val.as_i128() {
             if v < 1 {
-              return Err(anyhow::anyhow!("`cache_size` must be a positive integer (>= 1)"))?;
+              return Err(anyhow::anyhow!("`cache_size` must be a positive integer"))?;
             }
           } else {
             return Err(anyhow::anyhow!("`cache_size` must be an integer"))?;
           }
         }
-
         if let Some(cache_ttl_val) = entry.props.get("cache_ttl") {
           if let Some(v) = cache_ttl_val.as_i128() {
             if v < 1 {
@@ -219,7 +213,8 @@ struct GeoIPModule {
   countries: Arc<HashSet<String>>,
   allow_unknown: bool,
   reader: Arc<Reader<Vec<u8>>>,
-  cache: Arc<Mutex<LruCache<IpAddr, CacheEntry>>>,
+  cache: Arc<DashMap<IpAddr, CacheEntry>>,
+  cache_max_size: usize,
   cache_ttl: Duration,
 }
 
@@ -231,6 +226,7 @@ impl Module for GeoIPModule {
       allow_unknown: self.allow_unknown,
       reader: Arc::clone(&self.reader),
       cache: Arc::clone(&self.cache),
+      cache_max_size: self.cache_max_size,
       cache_ttl: self.cache_ttl,
     })
   }
@@ -241,19 +237,34 @@ struct GeoIPModuleHandlers {
   countries: Arc<HashSet<String>>,
   allow_unknown: bool,
   reader: Arc<Reader<Vec<u8>>>,
-  cache: Arc<Mutex<LruCache<IpAddr, CacheEntry>>>,
+  cache: Arc<DashMap<IpAddr, CacheEntry>>,
+  cache_max_size: usize,
   cache_ttl: Duration,
 }
 
 impl GeoIPModuleHandlers {
+  fn evict_if_needed(&self) {
+    if self.cache.len() < self.cache_max_size {
+      return;
+    }
+
+    if let Some(oldest) = self
+      .cache
+      .iter()
+      .min_by_key(|entry| entry.value().inserted_at)
+      .map(|entry| *entry.key())
+    {
+      self.cache.remove(&oldest);
+    }
+  }
+
   fn lookup_country_cached(&self, ip: IpAddr) -> Option<String> {
     let now = Instant::now();
-    let mut cache = self.cache.lock();
-    if let Some(entry) = cache.get(&ip) {
+    if let Some(entry) = self.cache.get(&ip) {
       if now.duration_since(entry.inserted_at) <= self.cache_ttl {
         return entry.country.clone();
       }
-      cache.pop(&ip);
+      self.cache.remove(&ip);
     }
 
     let country = self
@@ -264,7 +275,9 @@ impl GeoIPModuleHandlers {
       .flatten()
       .and_then(|c| c.country.iso_code.map(|c| c.to_ascii_uppercase()));
 
-    self.cache.lock().put(
+    self.evict_if_needed();
+
+    self.cache.insert(
       ip,
       CacheEntry {
         country: country.clone(),
@@ -274,6 +287,7 @@ impl GeoIPModuleHandlers {
 
     country
   }
+
   fn should_block(&self, country: Option<&str>) -> bool {
     match country {
       Some(code) => match self.mode {

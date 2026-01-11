@@ -25,7 +25,7 @@ geoip_filter mode="whitelist" countries="VN,US,JP,KR" allow_unknown=#false db_pa
 | `countries` | string | Yes | Comma-separated country codes (ISO 3166-1 alpha-2) |
 | `allow_unknown` | boolean | No | Allow IPs with unknown country (default: `false`) |
 | `db_path` | string | Yes | Path to MaxMind GeoIP2-Country database file |
-| `cache_size` | integer | No | Maximum number of IPs stored in LRU cache (default: `10000`) |
+| `cache_size` | integer | No | Maximum number of IPs stored in cache (default: `10000`) |
 | `cache_ttl` | integer | No | Cache entry TTL in seconds (default: `300`) |
 
 ## Modes
@@ -102,5 +102,5 @@ Full list: https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2
 - Country codes are case-insensitive (converted to uppercase internally)
 - Whitespace in country list is automatically trimmed
 - Database is loaded once at startup and cached in memory
-- LRU cache greatly improves performance under high traffic
+- Cache greatly improves performance under high traffic
 - For best security, use `allow_unknown: false` to block unknown IPs
