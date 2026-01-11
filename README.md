@@ -8,8 +8,6 @@ A Ferron server module that blocks or allows HTTP requests based on the client's
 - **Blacklist mode**: Block specified countries
 - **Unknown IP handling**: Configurable behavior for IPs not found in database
 - **MaxMind GeoIP2**: Uses industry-standard geolocation database
-- **LRU cache**: High-performance in-memory cache for IP lookups
-- **Cache TTL**: Automatic cache expiration to keep data fresh
 
 ## Configuration
 
@@ -25,8 +23,6 @@ geoip_filter mode="whitelist" countries="VN,US,JP,KR" allow_unknown=#false db_pa
 | `countries` | string | Yes | Comma-separated country codes (ISO 3166-1 alpha-2) |
 | `allow_unknown` | boolean | No | Allow IPs with unknown country (default: `false`) |
 | `db_path` | string | Yes | Path to MaxMind GeoIP2-Country database file |
-| `cache_size` | integer | No | Maximum number of IPs stored in cache (default: `10000`) |
-| `cache_ttl` | integer | No | Cache entry TTL in seconds (default: `300`) |
 
 ## Modes
 
@@ -44,9 +40,9 @@ geoip_filter mode="whitelist" countries="VN,US,JP,KR" allow_unknown=#false db_pa
 
 ## Examples
 
-### Example 1: Allow only Vietnam and USA (with cache)
+### Example 1: Allow only Vietnam and USA
 ```
-geoip_filter mode="whitelist" countries ="VN,US" allow_unknown=#false db_path="/etc/ferron/GeoLite2-Country.mmdb" cache_size=20000 cache_ttl=600
+geoip_filter mode="whitelist" countries ="VN,US" allow_unknown=#false db_path="/etc/ferron/GeoLite2-Country.mmdb"
 ```
 
 ### Example 2: Block specific countries
@@ -102,5 +98,4 @@ Full list: https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2
 - Country codes are case-insensitive (converted to uppercase internally)
 - Whitespace in country list is automatically trimmed
 - Database is loaded once at startup and cached in memory
-- Cache greatly improves performance under high traffic
 - For best security, use `allow_unknown: false` to block unknown IPs

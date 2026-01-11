@@ -1,9 +1,7 @@
-use dashmap::DashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -31,10 +29,6 @@ impl GeoIPMode {
       _ => Err(format!("Invalid GeoIP mode: {}. Valid modes are: whitelist, blacklist", s).into()),
     }
   }
-}
-struct CacheEntry {
-  country: Option<String>,
-  inserted_at: Instant,
 }
 
 pub struct GeoIPModuleLoader {
@@ -71,7 +65,7 @@ impl ModuleLoader for GeoIPModuleLoader {
           let mode_str = geoip_entry
             .and_then(|e| e.props.get("mode"))
             .and_then(|v| v.as_str())
-            .ok_or("Missing geoip_filter mode configuration")?;
+            .ok_or("Missing geoip_filter 'mode' configuration")?;
           let mode = GeoIPMode::from_str(mode_str)?;
 
           let countries_str = geoip_entry
@@ -86,7 +80,9 @@ impl ModuleLoader for GeoIPModuleLoader {
             .collect();
 
           if countries.is_empty() {
-            return Err("geoip_filter countries must contain at least one country code".into());
+            return Err(anyhow::anyhow!(
+              "geoip_filter countries must contain at least one country code"
+            ))?;
           }
 
           let allow_unknown = geoip_entry
@@ -102,26 +98,11 @@ impl ModuleLoader for GeoIPModuleLoader {
           let reader = Reader::open_readfile(db_path)
             .map_err(|e| format!("Failed to open MaxMind database at {}: {}", db_path, e))?;
 
-          let cache_max_size = geoip_entry
-            .and_then(|e| e.props.get("cache_size"))
-            .and_then(|v| v.as_i128())
-            .unwrap_or(10_000)
-            .max(1) as usize;
-
-          let cache_ttl_secs = geoip_entry
-            .and_then(|e| e.props.get("cache_ttl"))
-            .and_then(|v| v.as_i128())
-            .unwrap_or(300)
-            .max(1) as u64;
-
           Ok(Arc::new(GeoIPModule {
             mode,
             countries: Arc::new(countries),
             allow_unknown,
             reader: Arc::new(reader),
-            cache: Arc::new(DashMap::new()),
-            cache_max_size,
-            cache_ttl: Duration::from_secs(cache_ttl_secs),
           }))
         })?,
     )
@@ -157,13 +138,21 @@ impl ModuleLoader for GeoIPModuleLoader {
         }
 
         if let Some(countries_val) = entry.props.get("countries") {
-          if !countries_val.is_string() {
-            return Err(anyhow::anyhow!("The `countries` property must be a string"))?;
+          let countries_str = countries_val
+            .as_str()
+            .ok_or("The `countries` property must be a string")?;
+
+          for country in countries_str.split(',') {
+            let country = country.trim().to_uppercase();
+            if !country.is_empty() && (country.len() != 2 || !country.chars().all(|c| c.is_ascii_alphabetic())) {
+              return Err(anyhow::anyhow!(
+                "Invalid country code '{}'. Must be 2-letter ISO 3166-1 alpha-2 code",
+                country
+              ))?;
+            }
           }
         } else {
-          return Err(anyhow::anyhow!(
-            "The `countries` property is required in geoip_filter configuration"
-          ))?;
+          return Err("The `countries` property is required in geoip_filter configuration".into());
         }
 
         if let Some(allow_unknown_val) = entry.props.get("allow_unknown") {
@@ -181,27 +170,6 @@ impl ModuleLoader for GeoIPModuleLoader {
             "The `db_path` property is required in geoip_filter configuration"
           ))?;
         }
-
-        if let Some(cache_size_val) = entry.props.get("cache_size") {
-          if let Some(v) = cache_size_val.as_i128() {
-            if v < 1 {
-              return Err(anyhow::anyhow!("`cache_size` must be a positive integer"))?;
-            }
-          } else {
-            return Err(anyhow::anyhow!("`cache_size` must be an integer"))?;
-          }
-        }
-        if let Some(cache_ttl_val) = entry.props.get("cache_ttl") {
-          if let Some(v) = cache_ttl_val.as_i128() {
-            if v < 1 {
-              return Err(anyhow::anyhow!(
-                "`cache_ttl` must be a positive integer (>= 1, seconds)"
-              ))?;
-            }
-          } else {
-            return Err(anyhow::anyhow!("`cache_ttl` must be an integer (seconds)"))?;
-          }
-        }
       }
     }
     Ok(())
@@ -213,9 +181,6 @@ struct GeoIPModule {
   countries: Arc<HashSet<String>>,
   allow_unknown: bool,
   reader: Arc<Reader<Vec<u8>>>,
-  cache: Arc<DashMap<IpAddr, CacheEntry>>,
-  cache_max_size: usize,
-  cache_ttl: Duration,
 }
 
 impl Module for GeoIPModule {
@@ -225,9 +190,6 @@ impl Module for GeoIPModule {
       countries: Arc::clone(&self.countries),
       allow_unknown: self.allow_unknown,
       reader: Arc::clone(&self.reader),
-      cache: Arc::clone(&self.cache),
-      cache_max_size: self.cache_max_size,
-      cache_ttl: self.cache_ttl,
     })
   }
 }
@@ -237,53 +199,17 @@ struct GeoIPModuleHandlers {
   countries: Arc<HashSet<String>>,
   allow_unknown: bool,
   reader: Arc<Reader<Vec<u8>>>,
-  cache: Arc<DashMap<IpAddr, CacheEntry>>,
-  cache_max_size: usize,
-  cache_ttl: Duration,
 }
 
 impl GeoIPModuleHandlers {
-  fn evict_if_needed(&self) {
-    if self.cache.len() < self.cache_max_size {
-      return;
-    }
-
-    if let Some(oldest) = self
-      .cache
-      .iter()
-      .min_by_key(|entry| entry.value().inserted_at)
-      .map(|entry| *entry.key())
-    {
-      self.cache.remove(&oldest);
-    }
-  }
-
-  fn lookup_country_cached(&self, ip: IpAddr) -> Option<String> {
-    let now = Instant::now();
-    if let Some(entry) = self.cache.get(&ip) {
-      if now.duration_since(entry.inserted_at) <= self.cache_ttl {
-        return entry.country.clone();
-      }
-      self.cache.remove(&ip);
-    }
-
+  fn lookup_country(&self, ip: IpAddr) -> Option<String> {
     let country = self
       .reader
       .lookup(ip)
-      .ok()
-      .and_then(|r| r.decode::<maxminddb::geoip2::City>().ok())
-      .flatten()
+      .ok()?
+      .decode::<maxminddb::geoip2::City>()
+      .ok()?
       .and_then(|c| c.country.iso_code.map(|c| c.to_ascii_uppercase()));
-
-    self.evict_if_needed();
-
-    self.cache.insert(
-      ip,
-      CacheEntry {
-        country: country.clone(),
-        inserted_at: now,
-      },
-    );
 
     country
   }
@@ -310,7 +236,7 @@ impl ModuleHandlers for GeoIPModuleHandlers {
   ) -> Result<ResponseData, Box<dyn Error + Send + Sync>> {
     let ip = socket_data.remote_addr.ip().to_canonical();
 
-    let country = self.lookup_country_cached(ip);
+    let country = self.lookup_country(ip);
 
     if self.should_block(country.as_deref()) {
       error_logger
