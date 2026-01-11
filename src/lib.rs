@@ -129,7 +129,9 @@ impl ModuleLoader for GeoIPModuleLoader {
       for entry in &entries.inner {
         // Validate boolean value
         if entry.values.len() != 1 || !entry.values[0].is_bool() {
-          return Err("The `geoip_filter` configuration property must have exactly one boolean value".into());
+          return Err(anyhow::anyhow!(
+            "The `geoip_filter` configuration property must have exactly one boolean value"
+          ))?;
         }
 
         // Validate mode property
@@ -137,35 +139,41 @@ impl ModuleLoader for GeoIPModuleLoader {
           if let Some(mode_str) = mode_val.as_str() {
             GeoIPMode::from_str(mode_str)?;
           } else {
-            return Err("The `mode` property must be a string".into());
+            return Err(anyhow::anyhow!("The `mode` property must be a string"))?;
           }
         } else {
-          return Err("The `mode` property is required in geoip_filter configuration".into());
+          return Err(anyhow::anyhow!(
+            "The `mode` property is required in geoip_filter configuration"
+          ))?;
         }
 
         // Validate countries property
         if let Some(countries_val) = entry.props.get("countries") {
           if !countries_val.is_string() {
-            return Err("The `countries` property must be a string".into());
+            return Err(anyhow::anyhow!("The `countries` property must be a string"))?;
           }
         } else {
-          return Err("The `countries` property is required in geoip_filter configuration".into());
+          return Err(anyhow::anyhow!(
+            "The `countries` property is required in geoip_filter configuration"
+          ))?;
         }
 
         // Validate allow_unknown property (optional)
         if let Some(allow_unknown_val) = entry.props.get("allow_unknown") {
           if !allow_unknown_val.is_bool() {
-            return Err("The `allow_unknown` property must be a boolean".into());
+            return Err(anyhow::anyhow!("The `allow_unknown` property must be a boolean"))?;
           }
         }
 
         // Validate db_path property
         if let Some(db_path_val) = entry.props.get("db_path") {
           if !db_path_val.is_string() {
-            return Err("The `db_path` property must be a string".into());
+            return Err(anyhow::anyhow!("The `db_path` property must be a string"))?;
           }
         } else {
-          return Err("The `db_path` property is required in geoip_filter configuration".into());
+          return Err(anyhow::anyhow!(
+            "The `db_path` property is required in geoip_filter configuration"
+          ))?;
         }
       }
     }
