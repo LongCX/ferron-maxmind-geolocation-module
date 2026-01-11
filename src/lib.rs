@@ -26,7 +26,10 @@ impl GeoIPMode {
     match s.to_lowercase().as_str() {
       "whitelist" => Ok(GeoIPMode::Whitelist),
       "blacklist" => Ok(GeoIPMode::Blacklist),
-      _ => Err(format!("Invalid GeoIP mode: {}. Valid modes are: whitelist, blacklist", s).into()),
+      _ => Err(anyhow::anyhow!(
+        "Invalid GeoIP mode: {}. Valid modes are: whitelist, blacklist",
+        s
+      ))?,
     }
   }
 }
@@ -96,7 +99,7 @@ impl ModuleLoader for GeoIPModuleLoader {
             .ok_or("Missing geoip_filter db_path configuration")?;
 
           let reader = Reader::open_readfile(db_path)
-            .map_err(|e| format!("Failed to open MaxMind database at {}: {}", db_path, e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to open MaxMind database at {}: {}", db_path, e))?;
 
           Ok(Arc::new(GeoIPModule {
             mode,
@@ -152,7 +155,9 @@ impl ModuleLoader for GeoIPModuleLoader {
             }
           }
         } else {
-          return Err("The `countries` property is required in geoip_filter configuration".into());
+          return Err(anyhow::anyhow!(
+            "The `countries` property is required in geoip_filter configuration"
+          ))?;
         }
 
         if let Some(allow_unknown_val) = entry.props.get("allow_unknown") {
