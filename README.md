@@ -1,18 +1,17 @@
 # GeoIP Filter Module
 
-A Ferron server module that blocks or allows HTTP requests based on the client's country using MaxMind GeoIP2 database.
+A Ferron server module that blocks or allows HTTP requests based on the client's country using API external lookup.
 
 ## Features
 
 - **Whitelist mode**: Allow only specified countries
 - **Blacklist mode**: Block specified countries
 - **Unknown IP handling**: Configurable behavior for IPs not found in database
-- **MaxMind GeoIP2**: Uses industry-standard geolocation database
 
 ## Configuration
 
 ```
-geoip_filter mode="whitelist" countries="VN,US,JP,KR" allow_unknown=#false db_path="/path/to/GeoLite2-Country.mmdb"
+geoip_filter mode="whitelist" countries="VN,US,JP,KR" allow_unknown=#false api_url="http://127.0.0.1/check-ip?ip="
 ```
 
 ### Parameters
@@ -22,7 +21,7 @@ geoip_filter mode="whitelist" countries="VN,US,JP,KR" allow_unknown=#false db_pa
 | `mode` | string | Yes | `whitelist` or `blacklist` |
 | `countries` | string | Yes | Comma-separated country codes (ISO 3166-1 alpha-2) |
 | `allow_unknown` | boolean | No | Allow IPs with unknown country (default: `false`) |
-| `db_path` | string | Yes | Path to MaxMind GeoIP2-Country database file |
+| `api_url` | string | Yes | API to lookup IP |
 
 ## Modes
 
@@ -42,30 +41,12 @@ geoip_filter mode="whitelist" countries="VN,US,JP,KR" allow_unknown=#false db_pa
 
 ### Example 1: Allow only Vietnam and USA
 ```
-geoip_filter mode="whitelist" countries ="VN,US" allow_unknown=#false db_path="/etc/ferron/GeoLite2-Country.mmdb"
+geoip_filter mode="whitelist" countries ="VN,US" allow_unknown=#false api_url="http://127.0.0.1/check-ip?ip="
 ```
 
 ### Example 2: Block specific countries
 ```
-geoip_filter mode="blacklist" countries="CN,RU,KP" allow_unknown=#true db_path="/etc/ferron/GeoLite2-Country.mmdb"
-```
-
-## MaxMind Database
-
-### Download GeoLite2-Country Database
-
-1. Sign up for a free MaxMind account at https://www.maxmind.com/en/geolite2/signup
-2. Download GeoLite2-Country database in MMDB format
-3. Place the `.mmdb` file on your server
-4. Update `db_path` in configuration
-
-## Dependencies
-
-Add to `Cargo.toml`:
-
-```toml
-[dependencies]
-maxminddb = "0.27"
+geoip_filter mode="blacklist" countries="CN,RU,KP" allow_unknown=#true api_url="http://127.0.0.1/check-ip?ip="
 ```
 
 ## Response
@@ -97,5 +78,4 @@ Full list: https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2
 
 - Country codes are case-insensitive (converted to uppercase internally)
 - Whitespace in country list is automatically trimmed
-- Database is loaded once at startup and cached in memory
 - For best security, use `allow_unknown: false` to block unknown IPs

@@ -11,7 +11,8 @@ ferron-common = { git = "https://github.com/ferronweb/ferron.git", branch = "dev
 http-body-util = "0.1.3"
 hyper = "1.6.0"
 tokio = { version = "1.45.0", default-features = false }
-maxminddb = "0.27.1"
+reqwest = { version = "0.13", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
 shiba = "0.1.1"

@@ -2,12 +2,13 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
 use hyper::{Request, StatusCode};
-use maxminddb::Reader;
+use serde::Deserialize;
 
 use ferron_common::config::ServerConfiguration;
 use ferron_common::logging::ErrorLogger;
@@ -32,6 +33,11 @@ impl GeoIPMode {
       ))?,
     }
   }
+}
+
+#[derive(Debug, Deserialize)]
+struct GeoIPResponse {
+  country_code: String,
 }
 
 pub struct GeoIPModuleLoader {
@@ -93,19 +99,22 @@ impl ModuleLoader for GeoIPModuleLoader {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-          let db_path = geoip_entry
-            .and_then(|e| e.props.get("db_path"))
+          let api_url = geoip_entry
+            .and_then(|e| e.props.get("url"))
             .and_then(|v| v.as_str())
-            .ok_or("Missing geoip_filter db_path configuration")?;
+            .ok_or_else(|| anyhow::anyhow!("The `api_url` property is required for maxmind-geolocation the module"))?
+            .to_string();
 
-          let reader = Reader::open_readfile(db_path)
-            .map_err(|e| anyhow::anyhow!("Failed to open MaxMind database at {}: {}", db_path, e))?;
+          let client = _secondary_runtime
+            .block_on(async { reqwest::Client::builder().timeout(Duration::from_secs(1)).build() })?;
 
           Ok(Arc::new(GeoIPModule {
             mode,
             countries: Arc::new(countries),
             allow_unknown,
-            reader: Arc::new(reader),
+            api_url,
+            client: Arc::new(client),
+            runtime: _secondary_runtime.handle().clone(),
           }))
         })?,
     )
@@ -166,13 +175,13 @@ impl ModuleLoader for GeoIPModuleLoader {
           }
         }
 
-        if let Some(db_path_val) = entry.props.get("db_path") {
-          if !db_path_val.is_string() {
-            return Err(anyhow::anyhow!("The `db_path` property must be a string"))?;
+        if let Some(api_url_val) = entry.props.get("api_url") {
+          if !api_url_val.is_string() {
+            return Err(anyhow::anyhow!("The `api_url` property must be a string"))?;
           }
         } else {
           return Err(anyhow::anyhow!(
-            "The `db_path` property is required in geoip_filter configuration"
+            "The `api_url` property is required in geoip_filter configuration"
           ))?;
         }
       }
@@ -185,7 +194,9 @@ struct GeoIPModule {
   mode: GeoIPMode,
   countries: Arc<HashSet<String>>,
   allow_unknown: bool,
-  reader: Arc<Reader<Vec<u8>>>,
+  api_url: String,
+  client: Arc<reqwest::Client>,
+  runtime: tokio::runtime::Handle,
 }
 
 impl Module for GeoIPModule {
@@ -194,7 +205,9 @@ impl Module for GeoIPModule {
       mode: self.mode.clone(),
       countries: Arc::clone(&self.countries),
       allow_unknown: self.allow_unknown,
-      reader: Arc::clone(&self.reader),
+      api_url: self.api_url.clone(),
+      client: self.client.clone(),
+      runtime: self.runtime.clone(),
     })
   }
 }
@@ -203,20 +216,23 @@ struct GeoIPModuleHandlers {
   mode: GeoIPMode,
   countries: Arc<HashSet<String>>,
   allow_unknown: bool,
-  reader: Arc<Reader<Vec<u8>>>,
+  api_url: String,
+  client: Arc<reqwest::Client>,
+  runtime: tokio::runtime::Handle,
 }
 
 impl GeoIPModuleHandlers {
   fn lookup_country(&self, ip: IpAddr) -> Option<String> {
-    let country = self
-      .reader
-      .lookup(ip)
-      .ok()?
-      .decode::<maxminddb::geoip2::City>()
-      .ok()?
-      .and_then(|c| c.country.iso_code.map(|c| c.to_ascii_uppercase()));
+    let client = self.client.clone();
+    let url = format!("{}{}", self.api_url, ip);
 
-    country
+    let res = self.runtime.spawn(async move {
+      let response = client.get(&url).send().await.ok()?;
+      let geo_data = response.json::<GeoIPResponse>().await.ok()?;
+      Some(geo_data.country_code.to_uppercase())
+    });
+
+    self.runtime.block_on(res).ok().flatten()
   }
 
   fn should_block(&self, country: Option<&str>) -> bool {
