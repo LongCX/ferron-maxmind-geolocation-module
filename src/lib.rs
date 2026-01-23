@@ -229,13 +229,10 @@ impl GeoIPModuleHandlers {
     let res = self.runtime.spawn(async move {
       let response = client.get(&url).send().await.ok()?;
       let geo_data = response.json::<GeoIPResponse>().await.ok()?;
-      println!("Parsed country_code: {}", geo_data.country_code);
       Some(geo_data.country_code.to_uppercase())
     });
 
-    let result = self.runtime.block_on(res).ok().flatten();
-    println!("DEBUG: Country result: {:?}", result);
-    result
+    self.runtime.block_on(res).ok().flatten()
   }
 
   fn should_block(&self, country: Option<&str>) -> bool {
