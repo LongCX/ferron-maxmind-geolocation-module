@@ -100,7 +100,7 @@ impl ModuleLoader for GeoIPModuleLoader {
             .unwrap_or(false);
 
           let api_url = geoip_entry
-            .and_then(|e| e.props.get("url"))
+            .and_then(|e| e.props.get("api_url"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("The `api_url` property is required for maxmind-geolocation the module"))?
             .to_string();
