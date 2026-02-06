@@ -229,7 +229,7 @@ impl GeoIPModuleHandlers {
     let res = self.runtime.spawn(async move {
       let response = client.get(&url).send().await.ok()?;
       let geo_data = response.json::<GeoIPResponse>().await.ok()?;
-      Some(geo_data.country_code.to_uppercase())
+      Some(geo_data.country_code.to_uppercase()).filter(|c| c != "UNKNOWN")
     });
 
     self.runtime.block_on(res).ok().flatten()
